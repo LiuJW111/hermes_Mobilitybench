@@ -389,25 +389,32 @@ head -n 20 data/results/hermes_qwen3.5-4b_5000/case_summary.csv
 
 ### 指标说明
 
-| 维度 | 指标 | 含义 | 越...越好 |
-|------|------|------|-----------|
-| **Tool Use** | TS_P | 工具调用精确率 | 高 |
-| | TS_R | 工具调用召回率 | 高 |
-| | SC | 工具调用成功率 | 高 |
-| **Planning** | DEC_P | 决策精确率 | 高 |
-| | DEC_R | 决策召回率 | 高 |
-| **Efficiency** | IT | 迭代次数 | 低 |
-| | OT | 总耗时（秒） | 低 |
-| **Instruction** | ID | 指令理解准确度 | 高 |
-| | IE | 指令执行效率 | 高 |
-| **Answer** | DR | 答案准确率 | 高 |
-| | FPR | 误报率 | 低 |
+| 维度 | 指标 | 全称 | 含义 | 越...越好 |
+|------|------|------|------|-----------|
+| **Tool Use**<br>(工具使用) | TS_P | Tool Selection Precision | 工具选择精确率（覆盖率）- 预测的工具中覆盖期望工具的比例 | 高 |
+| | TS_R | Tool Selection Recall | 工具选择召回率（非冗余度）- 1 减去冗余率，衡量是否有多余调用 | 高 |
+| | SC | Schema Compliance | 模式合规率 - 工具调用参数的完整性和正确性 | 高 |
+| **Planning**<br>(规划能力) | DEC_P | Decomposition Precision | 分解精确率 - 预测步骤中匹配标准步骤的比例 | 高 |
+| | DEC_R | Decomposition Recall | 分解召回率 - 标准步骤中被预测步骤覆盖的比例 | 高 |
+| **Efficiency**<br>(效率) | IT | Input Tokens | 输入 token 总数 - Agent 消耗的上下文 token 数 | 低 |
+| | OT | Output Tokens | 输出 token 总数 - Agent 生成的 token 数 | 低 |
+| **Instruction**<br>(指令理解) | ID | Intent Detection | 意图检测准确度 - Agent 是否正确识别用户查询意图（语义相似度） | 高 |
+| | IE | Information Extraction | 信息抽取准确度 - Agent 是否正确提取所有约束条件和槽位 | 高 |
+| **Answer**<br>(答案质量) | DR | Delivery Rate | 交付率 - Agent 是否产生完整、可执行的输出（而非失败消息） | 高 |
+| | FPR | Final Pass Rate | 最终通过率 - 解决方案是否满足所有用户约束条件（答案准确率） | 高 |
+
+**重要说明**：
+
+- **TS_P vs TS_R**: TS_P 关注"是否调用了需要的工具"（覆盖率），TS_R 关注"是否有冗余调用"（非冗余度）
+- **IT & OT**: 这两个是绝对值（token 数量），不是比率，数值越低表示效率越高
+- **DR vs FPR**: DR 检查是否给出了有效回答（而不是"无法提供"等失败消息），FPR 检查回答内容是否正确
+- **原生评分器**: 如果 embedding 模型缺失，ID/IE/FPR 会退化为简单的字符相似度匹配，结果可能失真
 
 ### 结果示例
 
 查看实际评估结果：
 
-```bash
+```
 # Qwen3.5-4B 结果
 cat data/results/hermes_qwen3.5-4b_5000/evaluation/metrics_summary.md
 
@@ -422,7 +429,7 @@ cat data/results/hermes_deepseek-v4-flash_5000/evaluation/metrics_summary.md
 
 使用合并脚本对比多个模型：
 
-```bash
+```
 python scripts/merge_eval_summaries.py \
   --results-dir data/results \
   --output comparison_report.md
@@ -581,7 +588,7 @@ cp scripts/hermes_eval/run_eval_qwen3.5-4b.sh scripts/hermes_eval/run_eval_new_m
 
 如果您使用了 MobilityBench 数据集或评估框架，请引用：
 
-```bibtex
+```
 @article{song2026mobilitybench,
   title={MobilityBench: A Benchmark for Evaluating Route-Planning Agents in Real-World Mobility Scenarios},
   author={Song, Zhiheng and Zhang, Jingshuai and Qin, Chuan and Wang, Chao and Chen, Chao and Xu, Longfei and Liu, Kaikui and Chu, Xiangxiang and Zhu, Hengshu},
@@ -595,7 +602,7 @@ cp scripts/hermes_eval/run_eval_qwen3.5-4b.sh scripts/hermes_eval/run_eval_new_m
 
 如果您使用了 Hermes Agent，请引用：
 
-```bibtex
+```
 @misc{hermes_agent,
   title={Hermes Agent: A General-Purpose Agent Framework},
   author={Nous Research},
