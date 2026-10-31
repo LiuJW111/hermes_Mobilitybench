@@ -103,11 +103,14 @@ run_agent.AIAgent.__init__ = _init
 
 
 def _chat(self, *a, **k):
-    result = _orig_chat(self, *a, **k)
-    _cap["prompt_tokens"] = getattr(self, "session_prompt_tokens", 0) or 0
-    _cap["completion_tokens"] = getattr(self, "session_completion_tokens", 0) or 0
-    _cap["total_tokens"] = getattr(self, "session_total_tokens", 0) or 0
-    return result
+    try:
+        return _orig_chat(self, *a, **k)
+    finally:
+        # Capture usage even when the turn raises, so failed cases still keep
+        # their token counts in raw_results.json.
+        _cap["prompt_tokens"] = getattr(self, "session_prompt_tokens", 0) or 0
+        _cap["completion_tokens"] = getattr(self, "session_completion_tokens", 0) or 0
+        _cap["total_tokens"] = getattr(self, "session_total_tokens", 0) or 0
 
 
 run_agent.AIAgent.chat = _chat
@@ -115,8 +118,16 @@ run_agent.AIAgent.chat = _chat
 
 def _conversation(self, *a, **k):
     result = _orig_conversation(self, *a, **k)
-    if result.get("failed") or result.get("error") or not result.get("completed", False):
-        raise RuntimeError("Hermes conversation failed: " + str(result.get("error") or result.get("final_response")))
+    # Never raise here: the caller decides how to classify a non-completed
+    # turn, but the answer, tool-call count and token usage must be preserved.
+    _cap["api_calls"] = result.get("api_calls", 0) or 0
+    _cap["completed"] = bool(result.get("completed"))
+    _cap["partial"] = bool(result.get("partial"))
+    _cap["turn_exit_reason"] = str(result.get("turn_exit_reason") or "")
+    _cap["final_response"] = result.get("final_response") or ""
+    _cap["prompt_tokens"] = getattr(self, "session_prompt_tokens", 0) or 0
+    _cap["completion_tokens"] = getattr(self, "session_completion_tokens", 0) or 0
+    _cap["total_tokens"] = getattr(self, "session_total_tokens", 0) or 0
     return result
 
 
@@ -142,13 +153,28 @@ with open(sys.argv[1], encoding="utf-8") as fh:
     _prompt = fh.read()
 
 _devnull = open(os.devnull, "w")
+_error = ""
 try:
     with contextlib.redirect_stdout(_devnull):
         _answer = _run_agent(_prompt, toolsets=["sandbox"], use_config_toolsets=False) or ""
+except Exception as _exc:
+    _error = f"{type(_exc).__name__}: {_exc}"
+    _answer = _cap.get("final_response") or ""
 finally:
     _devnull.close()
 
-print("MOBILITYBENCH_HERMES_RESULT=" + json.dumps({"answer": _answer, **_cap}, ensure_ascii=False))
+if not _answer:
+    _error = _error or "Hermes returned no final answer"
+elif _cap.get("partial"):
+    _error = _error or "Hermes stopped on invalid tool calls"
+elif not _cap.get("completed", True):
+    _error = _error or (
+        f"Hermes budget exhausted after {_cap.get('api_calls', 0)} tool-call iterations"
+    )
+
+print("MOBILITYBENCH_HERMES_RESULT=" + json.dumps(
+    {"answer": _answer, "error": _error, **_cap}, ensure_ascii=False
+))
 '''
 
 
@@ -292,11 +318,19 @@ class HermesFramework(BaseFramework):
                 "stderr": stderr.replace(self._api_key(), "[REDACTED]"),
             }, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        answer, usage = self._parse_driver_stdout(stdout)
+        answer, usage, meta = self._parse_driver_stdout(stdout)
+        error = meta.get("error") or ""
+        if code != 0 and not error:
+            error = f"Hermes driver exited with code {code}"
         state["_hermes"] = {
             "answer": answer,
             "usage": usage,
             "tool_calls": tool_calls,
+            "error": error,
+            "api_calls": meta.get("api_calls", 0),
+            "completed": meta.get("completed", False),
+            "partial": meta.get("partial", False),
+            "turn_exit_reason": meta.get("turn_exit_reason", ""),
             "stdout": stdout,
             "stderr": stderr[-4000:],
             "exit": code,
@@ -307,16 +341,16 @@ class HermesFramework(BaseFramework):
 
     # ---------------------------------------------------------------- mapping
     @staticmethod
-    def _parse_driver_stdout(stdout: str) -> tuple[str, dict]:
+    def _parse_driver_stdout(stdout: str) -> tuple[str, dict, dict]:
         marker = "MOBILITYBENCH_HERMES_RESULT="
         records = [line[len(marker):] for line in stdout.splitlines() if line.startswith(marker)]
         payload = records[-1] if records else stdout.strip()
         try:
             data = json.loads(payload)
         except json.JSONDecodeError:
-            return "", {}
+            return "", {}, {"error": "driver output was not valid JSON"}
         if not isinstance(data, dict):
-            return "", {}
+            return "", {}, {"error": "driver output was not a JSON object"}
         answer = (data.get("answer") or "").strip()
         usage: dict = {}
         prompt_tokens = data.get("prompt_tokens", 0) or 0
@@ -327,7 +361,14 @@ class HermesFramework(BaseFramework):
                 "completion_tokens": completion_tokens,
                 "total_tokens": data.get("total_tokens", prompt_tokens + completion_tokens),
             }
-        return answer, usage
+        meta = {
+            "error": str(data.get("error") or ""),
+            "api_calls": int(data.get("api_calls", 0) or 0),
+            "completed": bool(data.get("completed", True)),
+            "partial": bool(data.get("partial", False)),
+            "turn_exit_reason": str(data.get("turn_exit_reason") or ""),
+        }
+        return answer, usage, meta
 
     def _read_session(self, home_path: Path) -> list[dict]:
         """Parse the newest session transcript for the tool trajectory."""
@@ -370,12 +411,23 @@ class HermesFramework(BaseFramework):
 
     def extract_result(self, final_state: dict) -> dict[str, Any]:
         hermes = final_state.get("_hermes", {})
-        if hermes.get("exit") != 0 or not hermes.get("answer"):
-            raise RuntimeError(f"Hermes failed or returned no answer; exit={hermes.get('exit')}; details: {hermes.get('artifact', '')}")
-        return standard_result(
+        result = standard_result(
             final_message=hermes.get("answer") or "",
             reasoning=[],
             tool_calls=hermes.get("tool_calls") or [],
             usage=hermes.get("usage") or {},
             query=final_state.get("query", ""),
         )
+        # Keep the failure status, but return the answer / tool trajectory /
+        # token usage as well so raw_results.json is never empty for an error.
+        error = hermes.get("error") or ""
+        if hermes.get("exit") != 0 and not error:
+            error = f"Hermes driver exited with code {hermes.get('exit')}"
+        if error:
+            result["error"] = error
+        result["planner_training_data"].update({
+            "api_calls": hermes.get("api_calls", 0),
+            "budget_exhausted": not hermes.get("completed", True),
+            "turn_exit_reason": hermes.get("turn_exit_reason", ""),
+        })
+        return result

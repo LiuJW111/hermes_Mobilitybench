@@ -14,6 +14,9 @@
 | DeepSeek-V4-Flash | 双卡 TP=2，gpu-mem 0.95，`deepseek_v4` |
 
 三个服务都关闭思考：`--default-chat-template-kwargs '{"enable_thinking": false}'`。
+Hermes 的工具调用步数预算由 `configs/harness/default.yaml` 的 `max_steps` 控制，
+当前为 **20 轮**；预算耗尽时 Hermes 会再请求一次总结，但若仍未正常结束，该题会被
+记为异常。
 
 > **需要知道的差异**：Hermes 源码硬性要求 `context_length >= 64000`
 > （`agent/model_metadata.py` 的 `MINIMUM_CONTEXT_LENGTH`，低于即抛
@@ -132,7 +135,7 @@ EVALUATE_ONLY=1 ./run_eval_qwen3.5-4b.sh
 |---|---|---|
 | `LIMIT` | `5000` | 取数据集前 N 条 |
 | `WORKERS` | `32` | 并发 Hermes 进程，可选 1/2/4/8/16/32/48/64/96 |
-| `OUT` | `data/results/hermes_<model>_5000` | 结果目录 |
+| `OUT` | `data/results/hermes_<model>_5000_s<步数>` | 结果目录（当前为 `_s20`） |
 | `RESUME` | `0` | `1` 续跑已有目录 |
 | `EVALUATE_ONLY` | `0` | `1` 只重算评分 |
 | `FORCE` | `0` | `1` 跳过“GPU 已被占用”检查 |
@@ -172,6 +175,10 @@ data/results/hermes_<model>_5000/
 > 是仓库占位值，**不代表任务失败**。脚本额外生成 `evaluation/metrics_summary.csv|md`，
 > 把所有子项和 `valid_cases/total_cases` 完整列出；判断效果请用子项。
 > `successful_cases` 只表示“该指标算出来了”，不代表任务正确。
+>
+> 异常题（`error` 非空）同样保留 `reporter_output`、`worker_output` 和 `token_usage`，
+> `planner_output` 里另有 `api_calls`、`budget_exhausted`、`turn_exit_reason`。
+> `error` 只表示执行状态；原生评估器会按已有数据继续评分，不会把整条结果丢掉。
 
 ## 6. 已知注意事项
 

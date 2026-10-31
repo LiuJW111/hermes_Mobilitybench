@@ -232,6 +232,7 @@ class BatchRunner(BaseRunner):
                 worker_output=extracted.get("worker_training_data", []),
                 reporter_output=extracted.get("plan_result", ""),
                 token_usage=extracted.get("token_usage", {}),
+                error=extracted.get("error"),
             )
 
         except Exception as e:

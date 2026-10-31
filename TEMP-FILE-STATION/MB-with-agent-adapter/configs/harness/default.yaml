@@ -106,5 +106,5 @@ harnesses:
     context_window: 65536
     max_output_tokens: 4096
     timeout: 900
-    max_steps: 12
+    max_steps: 20
     mcp_client: true

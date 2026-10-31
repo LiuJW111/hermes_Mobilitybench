@@ -25,6 +25,10 @@ case "$WORKERS" in
   *) fail "WORKERS must be one of 1 2 4 8 16 32 48 64 96 (run_hermes_batch.py limit)" ;;
 esac
 LIMIT="${LIMIT:-5000}"
+# Keep runs with different step budgets in separate directories; the runtime
+# hash includes configs/harness/default.yaml, so mixing them is refused anyway.
+STEPS="$("$MB_PY" -c "import sys; sys.path.insert(0, '$MB_ROOT/src'); from mobility_bench.agent.frameworks.harness import harness_config; print(harness_config('hermes').max_steps)" 2>/dev/null || echo 20)"
+STEPS="${STEPS:-20}"
 OUT="${OUT:-$MB_ROOT/data/results/hermes_${SLUG}_5000}"
 
 if [[ -f "$OUT/metadata.json" && "${RESUME:-0}" != "1" && "${EVALUATE_ONLY:-0}" != "1" ]]; then
